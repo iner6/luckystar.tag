@@ -8,9 +8,13 @@ const state = {
   entries: groups.map(() => Array.from({ length: 4 }, () => ({ personal: "", ideal: "" })))
 };
 
-const saved = JSON.parse(localStorage.getItem("dreamy-entry-sheet") || "null");
-if (saved?.entries?.length === 2) state.entries = saved.entries;
-if (saved?.names?.length === 2) state.names = saved.names;
+try {
+  const saved = JSON.parse(localStorage.getItem("dreamy-entry-sheet") || "null");
+  if (saved?.entries?.length === 2) state.entries = saved.entries;
+  if (saved?.names?.length === 2) state.names = saved.names;
+} catch (error) {
+  console.warn("暂存内容无法读取，已使用空白表格。", error);
+}
 
 const app = document.querySelector("#app");
 app.innerHTML = `
@@ -20,8 +24,9 @@ app.innerHTML = `
     </section>
     <nav class="actions" aria-label="表格操作">
       <button class="action" id="shuffle" type="button">打乱姓名</button>
-      <button class="action primary" id="export" type="button">导出图片</button>
-      <button class="action" id="exportHidden" type="button">隐藏姓名并导出</button>
+      <button class="action primary" id="export" type="button">导出完整表格</button>
+      <button class="action" id="exportPersonal" type="button">导出个人标签表格</button>
+      <button class="action" id="exportIdeal" type="button">导出理想型表格</button>
     </nav>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </div>`;
@@ -59,7 +64,11 @@ function escapeHtml(value = "") {
 }
 
 function saveState() {
-  localStorage.setItem("dreamy-entry-sheet", JSON.stringify(state));
+  try {
+    localStorage.setItem("dreamy-entry-sheet", JSON.stringify(state));
+  } catch (error) {
+    console.warn("暂存失败。", error);
+  }
 }
 
 sheetContent.addEventListener("input", event => {
@@ -68,6 +77,11 @@ sheetContent.addEventListener("input", event => {
   const { group, row, field } = input.dataset;
   state.entries[Number(group)][Number(row)][field] = input.value;
   saveState();
+});
+
+window.addEventListener("pagehide", saveState);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") saveState();
 });
 
 document.querySelector("#shuffle").addEventListener("click", () => {
@@ -116,10 +130,11 @@ const backgroundReady = new Promise((resolve, reject) => {
   backgroundImage.onerror = reject;
 });
 
-document.querySelector("#export").addEventListener("click", () => exportSheet(false));
-document.querySelector("#exportHidden").addEventListener("click", () => exportSheet(true));
+document.querySelector("#export").addEventListener("click", () => exportSheet("all"));
+document.querySelector("#exportPersonal").addEventListener("click", () => exportSheet("personal"));
+document.querySelector("#exportIdeal").addEventListener("click", () => exportSheet("ideal"));
 
-async function exportSheet(hideNames) {
+async function exportSheet(mode) {
   const buttons = [...document.querySelectorAll(".action")];
   buttons.forEach(button => button.disabled = true);
   showToast("正在生成图片…");
@@ -131,7 +146,7 @@ async function exportSheet(hideNames) {
     canvas.height = 1671;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(backgroundImage, 0, 0, canvas.width, canvas.height);
-    drawExportContent(ctx, hideNames);
+    drawExportContent(ctx, mode);
 
     const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png", 1));
     if (!blob) throw new Error("图片生成失败");
@@ -139,12 +154,13 @@ async function exportSheet(hideNames) {
     const url = URL.createObjectURL(blob);
     const stamp = new Date().toISOString().slice(0, 10);
     link.href = url;
-    link.download = `${hideNames ? "隐藏姓名-" : ""}词条摘录-${stamp}.png`;
+    const fileTitles = { all: "完整词条摘录", personal: "个人标签表格", ideal: "理想型表格" };
+    link.download = `${fileTitles[mode]}-${stamp}.png`;
     document.body.appendChild(link);
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
-    showToast(hideNames ? "已导出隐藏姓名版本" : "图片已导出");
+    showToast(`${fileTitles[mode]}已导出`);
   } catch (error) {
     console.error(error);
     showToast("导出失败，请重试");
@@ -153,7 +169,7 @@ async function exportSheet(hideNames) {
   }
 }
 
-function drawExportContent(ctx, hideNames) {
+function drawExportContent(ctx, mode) {
   const x = 70;
   const y = 197;
   const width = 801;
@@ -167,22 +183,26 @@ function drawExportContent(ctx, hideNames) {
       y: y + groupIndex * (groupHeight + gap),
       width,
       height: groupHeight,
-      title: group.title,
+      title: mode === "all"
+        ? group.title
+        : `${groupIndex === 0 ? "男生" : "女生"}${mode === "personal" ? "个人标签" : "理想型标签"}`,
       names: state.names[groupIndex],
       entries: state.entries[groupIndex],
-      hideNames
+      mode
     });
   });
 }
 
 function drawGroup(ctx, options) {
-  const { x, y, width, height, title, names, entries, hideNames } = options;
+  const { x, y, width, height, title, names, entries, mode } = options;
   const radius = 31;
   const titleHeight = 84;
   const tableHeight = height - titleHeight;
   const headerHeight = tableHeight * .52 / 4.52;
   const rowHeight = (tableHeight - headerHeight) / 4;
-  const columns = [width * .20, width * .40, width * .40];
+  const columns = mode === "all"
+    ? [width * .20, width * .40, width * .40]
+    : [width];
   const line = "rgba(123, 105, 177, .42)";
 
   ctx.save();
@@ -206,8 +226,10 @@ function drawGroup(ctx, options) {
   const tableY = y + titleHeight;
   ctx.fillStyle = "rgba(255,255,255,.24)";
   ctx.fillRect(x, tableY, width, headerHeight);
-  ctx.fillStyle = "rgba(244,240,255,.26)";
-  ctx.fillRect(x, tableY + headerHeight, columns[0], tableHeight - headerHeight);
+  if (mode === "all") {
+    ctx.fillStyle = "rgba(244,240,255,.26)";
+    ctx.fillRect(x, tableY + headerHeight, columns[0], tableHeight - headerHeight);
+  }
 
   ctx.strokeStyle = line;
   ctx.lineWidth = 1.7;
@@ -219,26 +241,27 @@ function drawGroup(ctx, options) {
     ctx.moveTo(x, rowY); ctx.lineTo(x + width, rowY);
   }
   let columnX = x;
-  for (let column = 0; column < 2; column++) {
+  for (let column = 0; column < columns.length - 1; column++) {
     columnX += columns[column];
     ctx.moveTo(columnX, tableY); ctx.lineTo(columnX, y + height);
   }
   ctx.stroke();
 
-  const centers = [
-    x + columns[0] / 2,
-    x + columns[0] + columns[1] / 2,
-    x + columns[0] + columns[1] + columns[2] / 2
-  ];
+  const centers = columns.map((column, index) =>
+    x + columns.slice(0, index).reduce((sum, item) => sum + item, 0) + column / 2
+  );
   ctx.fillStyle = "#7a7395";
   ctx.font = '400 23px "Microsoft JhengHei", "Noto Sans SC", sans-serif';
-  ["姓名", "个人标签", "理想型标签"].forEach((label, index) => {
+  const headers = mode === "all"
+    ? ["姓名", "个人标签", "理想型标签"]
+    : [mode === "personal" ? "个人标签" : "理想型标签"];
+  headers.forEach((label, index) => {
     ctx.fillText(label, centers[index], tableY + headerHeight / 2);
   });
 
   for (let row = 0; row < 4; row++) {
     const rowY = tableY + headerHeight + row * rowHeight;
-    if (!hideNames) {
+    if (mode === "all") {
       ctx.fillStyle = "#5e537f";
       ctx.font = '500 25px "Microsoft JhengHei", "Noto Sans SC", sans-serif';
       ctx.fillText(names[row], centers[0], rowY + rowHeight / 2);
@@ -248,8 +271,12 @@ function drawGroup(ctx, options) {
     ctx.textBaseline = "top";
     ctx.fillStyle = "#4f4969";
     ctx.font = '400 22px "Microsoft JhengHei", "Noto Sans SC", sans-serif';
-    drawWrappedText(ctx, entries[row]?.personal || "", x + columns[0] + 14, rowY + 12, columns[1] - 28, rowHeight - 24, 31);
-    drawWrappedText(ctx, entries[row]?.ideal || "", x + columns[0] + columns[1] + 14, rowY + 12, columns[2] - 28, rowHeight - 24, 31);
+    if (mode === "all") {
+      drawWrappedText(ctx, entries[row]?.personal || "", x + columns[0] + 14, rowY + 12, columns[1] - 28, rowHeight - 24, 31);
+      drawWrappedText(ctx, entries[row]?.ideal || "", x + columns[0] + columns[1] + 14, rowY + 12, columns[2] - 28, rowHeight - 24, 31);
+    } else {
+      drawWrappedText(ctx, entries[row]?.[mode] || "", x + 16, rowY + 12, width - 32, rowHeight - 24, 31);
+    }
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
   }
